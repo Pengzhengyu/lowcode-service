@@ -1,51 +1,53 @@
 /**
- * storageService.js - 页面配置存取（SQLite 版本）
+ * storageService.js - 页面配置存取 (MySQL 版本)
  */
-const db = require('../db');
+const db = require("../db");
 
 /**
  * 保存页面结构 JSON（新增或覆盖更新）
  */
-function saveSchema(id, schema) {
+async function saveSchema(id, schema) {
   const schemaText = JSON.stringify(schema);
-  const now = new Date().toISOString();
 
-  // 如果存在则更新，否则插入（SQLite UPSERT 语法）
-  db.run(
+  // MySQL 使用 ON DUPLICATE KEY UPDATE 实现 UPSERT
+  await db.query(
     `INSERT INTO page_configs (id, schema_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       schema_json = excluded.schema_json,
-       updated_at = excluded.updated_at`,
-    [id, schemaText, now, now]
+     VALUES (?, ?, NOW(), NOW())
+     ON DUPLICATE KEY UPDATE
+       schema_json = VALUES(schema_json),
+       updated_at = NOW()`,
+    [id, schemaText],
   );
 }
 
 /**
  * 根据 id 获取页面 JSON
  */
-function getSchemaById(id) {
-  const row = db.get(
-    'SELECT schema_json, updated_at FROM page_configs WHERE id = ?',
-    [id]
-  );
+async function getSchemaById(id) {
+  const row = await db.get("SELECT schema_json, updated_at FROM page_configs WHERE id = ?", [id]);
   if (!row) return null;
-  return JSON.parse(row.schema_json);
+
+  // MySQL 的 JSON 字段如果定义为 LONGTEXT 需要解析
+  // 如果在 db.js 中定义了 typeCast，则 row.schema_json 可能已经是对象
+  // 但此处 schema_json 在 page_configs 中是 LONGTEXT（见 db.js 初始化）
+  try {
+    return typeof row.schema_json === "string" ? JSON.parse(row.schema_json) : row.schema_json;
+  } catch (e) {
+    return row.schema_json;
+  }
 }
 
 /**
- * 获取所有页面配置列表（解析 JSON 提取元数据用于列表展示）
+ * 获取所有页面配置列表
  */
-function listSchemas() {
-  const rows = db.all(
-    'SELECT id, schema_json, created_at, updated_at FROM page_configs ORDER BY updated_at DESC'
-  );
-  
-  return rows.map(row => {
+async function listSchemas() {
+  const rows = await db.query("SELECT id, schema_json, created_at, updated_at FROM page_configs ORDER BY updated_at DESC");
+
+  return rows.map((row) => {
     let title = row.id;
     let moduleCode = row.id;
     try {
-      const schema = JSON.parse(row.schema_json);
+      const schema = typeof row.schema_json === "string" ? JSON.parse(row.schema_json) : row.schema_json;
       if (schema && schema.header && schema.header.title) {
         title = schema.header.title;
       }
@@ -53,7 +55,7 @@ function listSchemas() {
         moduleCode = schema.moduleCode;
       }
     } catch (e) {
-      console.error('Error parsing schema JSON for id:', row.id);
+      console.error("Error parsing schema JSON for id:", row.id);
     }
 
     return {
@@ -61,7 +63,7 @@ function listSchemas() {
       moduleCode: moduleCode,
       title: title,
       createTime: row.created_at,
-      updatedAt: row.updated_at
+      updatedAt: row.updated_at,
     };
   });
 }
@@ -69,5 +71,5 @@ function listSchemas() {
 module.exports = {
   saveSchema,
   getSchemaById,
-  listSchemas
+  listSchemas,
 };
